@@ -82,20 +82,29 @@ h3 {margin-bottom: 0 !important;}
 
 
 def contas() -> dict[str, dict]:
-    """Contas de acesso. Vários usuários: tabela [USUARIOS] no secrets.toml
-    (login -> {senha, id}). Sem ela, modo de um usuário só (APP_PASSWORD + USER_ID)."""
+    """Contas de acesso, na linha USUARIOS do secrets.toml. Dois papéis:
+      - paciente (padrão): {senha, id} -> registra e vê só os próprios dados;
+      - pesquisador: {senha, papel = "pesquisador"} -> sem diário próprio; vê todos os pacientes.
+    Sem USUARIOS: modo de um usuário só (APP_PASSWORD + USER_ID)."""
     tabela = cfg("USUARIOS")
     if tabela:
-        return {str(login).lower(): {"senha": str(v["senha"]), "id": str(v["id"]),
-                                     "pesquisador": bool(dict(v).get("pesquisador", False))}
-                for login, v in dict(tabela).items()}
+        saida = {}
+        for login, v in dict(tabela).items():
+            v = dict(v)
+            papel = "pesquisador" if v.get("papel") == "pesquisador" or v.get("pesquisador") else "paciente"
+            saida[str(login).lower()] = {"senha": str(v["senha"]), "papel": papel,
+                                         "id": str(v["id"]) if "id" in v else None}
+        return saida
     if cfg("APP_PASSWORD"):
-        return {"": {"senha": str(cfg("APP_PASSWORD")), "id": str(cfg("USER_ID", "usuario-local"))}}
+        return {"": {"senha": str(cfg("APP_PASSWORD")), "papel": "paciente",
+                      "id": str(cfg("USER_ID", "usuario-local"))}}
     return {}
 
 
-def autenticar() -> str:
-    """Devolve o id pseudônimo de quem entrou. Cada pessoa só enxerga os próprios dados."""
+def autenticar() -> str | None:
+    """Devolve o id pseudônimo do paciente que entrou (None para o pesquisador)."""
+    if st.session_state.get("papel") == "pesquisador":
+        return None
     if uid := st.session_state.get("id_usuario"):
         return uid
     todas = contas()
@@ -117,8 +126,8 @@ def autenticar() -> str:
         # compara mesmo quando o usuário não existe, para não revelar quais logins existem
         ok = hmac.compare_digest(senha, conta["senha"] if conta else "\0" * 16) and conta is not None
         if ok:
+            st.session_state["papel"] = conta["papel"]
             st.session_state["id_usuario"] = conta["id"]
-            st.session_state["pesquisador"] = conta.get("pesquisador", False)
             st.rerun()
         st.error("Usuário ou senha incorretos.")
     st.stop()
@@ -129,7 +138,21 @@ def sair() -> None:
         del st.session_state[chave]
 
 
-USUARIO = db.garantir_usuario(autenticar(), cfg("FUSO", db.FUSO_PADRAO))
+def area_pesquisador() -> None:
+    """Pesquisador não tem diário: só a visão dos pacientes."""
+    fuso = cfg("FUSO", db.FUSO_PADRAO)
+    c1, c2 = st.columns([4, 1], vertical_alignment="center")
+    c1.markdown("### 🔬 Área do pesquisador")
+    c2.button("Sair", on_click=sair, type="tertiary")
+    pacientes = {c["id"] for c in contas().values() if c["papel"] == "paciente" and c["id"]}
+    reports.render_pesquisa(sorted(pacientes | set(db.listar_usuarios())), fuso)
+    st.stop()
+
+
+_uid = autenticar()
+if _uid is None:
+    area_pesquisador()
+USUARIO = db.garantir_usuario(_uid, cfg("FUSO", db.FUSO_PADRAO))
 FUSO = db.fuso_do_usuario(USUARIO)
 AGORA = db.local_agora(FUSO)
 
@@ -300,8 +323,6 @@ def tela_inicio() -> None:
         with st.expander("ℹ️ Sobre o projeto"):
             st.markdown(INTRO_CURTA + "\n" + INTRO)
     st.button("📊 Relatórios", on_click=ir, args=("relatorios",), width="stretch")
-    if st.session_state.get("pesquisador"):
-        st.button("🔬 Pesquisa (participantes)", on_click=ir, args=("pesquisa",), width="stretch")
     if len(contas()) > 1:
         st.button("Sair", on_click=sair, type="tertiary")
 
@@ -578,17 +599,8 @@ def tela_relatorios() -> None:
     reports.render(USUARIO, FUSO)
 
 
-def tela_pesquisa() -> None:
-    st.button("← Início", on_click=ir, args=("inicio",), type="tertiary")
-    if not st.session_state.get("pesquisador"):
-        st.error("Acesso restrito ao pesquisador.")
-        return
-    ids = sorted({c["id"] for c in contas().values()} | set(db.listar_usuarios()))
-    reports.render_pesquisa(ids, FUSO)
-
-
 # ---------------------------------------------------------------- roteador
 
 TELAS = {"inicio": tela_inicio, "manha": tela_manha, "noite": tela_noite,
-         "crise": tela_crise, "relatorios": tela_relatorios, "pesquisa": tela_pesquisa}
+         "crise": tela_crise, "relatorios": tela_relatorios}
 TELAS.get(st.session_state.get("tela", "inicio"), tela_inicio)()

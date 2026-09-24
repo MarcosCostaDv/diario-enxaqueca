@@ -101,17 +101,12 @@ def _referencias(dia: pd.DataFrame, cri: pd.DataFrame, hoje: pd.Timestamp) -> No
         st.caption("Ainda não há dados suficientes para comparar com as referências.")
 
 
-def render_pesquisa(ids: list[str], fuso: str) -> None:
-    """Tela do pesquisador: participantes lado a lado, só descritivo."""
-    st.subheader("🔬 Pesquisa")
-    st.caption("Visível apenas para o pesquisador. Participantes identificados só pelo código. "
-               "Comparação descritiva: cada pessoa é analisada separadamente (N=1).")
-    hoje = pd.Timestamp(db.local_agora(fuso).date())
+def _visao_geral(ids: list[str], hoje: pd.Timestamp) -> None:
     linhas, pontos = [], []
     for uid in ids:
         dia, cri = db.df_diario(uid), db.df_crises(uid)
         if dia.empty and cri.empty:
-            linhas.append({"Participante": uid, "Dias acompanhados": 0})
+            linhas.append({"Paciente": uid, "Dias acompanhados": 0})
             continue
         inicio = min([x for x in (dia["data_referencia"].min() if len(dia) else None,
                                   cri["inicio_local"].min().normalize() if len(cri) else None) if x is not None])
@@ -119,7 +114,7 @@ def render_pesquisa(ids: list[str], fuso: str) -> None:
         ultimo = max([x for x in (dia["data_referencia"].max() if len(dia) else None,
                                   cri["inicio_local"].max().normalize() if len(cri) else None) if x is not None])
         linhas.append({
-            "Participante": uid,
+            "Paciente": uid,
             "Início": inicio.strftime("%d/%m/%Y"),
             "Dias acompanhados": n,
             "Adesão manhã": f"{dia['preenchido_manha_em_utc'].notna().sum() / n:.0%}",
@@ -134,10 +129,10 @@ def render_pesquisa(ids: list[str], fuso: str) -> None:
             "Dias sem registro": (hoje - ultimo).days,
         })
         for _, c in cri.iterrows():
-            pontos.append({"Participante": uid, "inicio": c["inicio_local"], "Começou com": c["inicio_tipo"]})
+            pontos.append({"Paciente": uid, "inicio": c["inicio_local"], "Começou com": c["inicio_tipo"]})
 
-    # participantes nas colunas, indicadores nas linhas: cabe na tela do celular
-    tabela = pd.DataFrame(linhas).set_index("Participante").T.astype(str).replace({"nan": "—"})
+    # pacientes nas colunas, indicadores nas linhas: cabe na tela do celular
+    tabela = pd.DataFrame(linhas).set_index("Paciente").T.astype(str).replace({"nan": "—"})
     st.dataframe(tabela, width="stretch", height=36 * (len(tabela) + 1) + 3)  # sem rolagem interna
     st.caption("\"Dias sem registro\" alto indica que a pessoa pode ter parado de preencher.")
 
@@ -145,14 +140,146 @@ def render_pesquisa(ids: list[str], fuso: str) -> None:
         st.markdown("**Crises ao longo do tempo**")
         st.altair_chart(alt.Chart(pd.DataFrame(pontos)).mark_point(filled=True, size=90).encode(
             x=alt.X("inicio:T", title=None),
-            y=alt.Y("Participante:N", title=None),
+            y=alt.Y("Paciente:N", title=None),
             color=alt.Color("Começou com:N", scale=alt.Scale(domain=["aura", "dor"], range=[AZUL, LARANJA]),
                             legend=alt.Legend(orient="top", title=None)),
             shape=alt.Shape("Começou com:N", scale=alt.Scale(domain=["aura", "dor"], range=["circle", "triangle"]),
                             legend=None),
-            tooltip=[alt.Tooltip("Participante:N"), alt.Tooltip("inicio:T", title="Início", format="%d/%m %H:%M"),
+            tooltip=[alt.Tooltip("Paciente:N"), alt.Tooltip("inicio:T", title="Início", format="%d/%m %H:%M"),
                      alt.Tooltip("Começou com:N")],
         ).properties(height=80 + 60 * len(ids)), width="stretch")
+
+
+def _sequencia_aura_dor(cri: pd.DataFrame) -> pd.Series:
+    """Classifica cada crise com aura nas categorias de Viana et al. (tolerância de 5 min)."""
+    cats = []
+    for _, c in cri[cri["teve_aura"] == True].iterrows():  # noqa: E712
+        if c["inicio_tipo"] == "dor":
+            cats.append("dor antes da aura")
+            continue
+        if c.get("sem_dor") or pd.isna(c["dor_inicio_local"]):
+            continue
+        dt = (c["dor_inicio_local"] - c["inicio_local"]).total_seconds() / 60
+        dur = c["aura_duracao_min"]
+        if dt <= 5:
+            cats.append("dor junto com a aura")
+        elif pd.isna(dur) or dur == 61:
+            continue
+        elif dt < dur - 5:
+            cats.append("dor durante a aura")
+        elif dt <= dur + 5:
+            cats.append("dor quando a aura terminou")
+        else:
+            cats.append("dor depois de um intervalo")
+    return pd.Series(cats, dtype="object")
+
+
+def _premonitorios_vespera(dia: pd.DataFrame, cri: pd.DataFrame) -> dict:
+    """Sintomas marcados na NOITE ANTERIOR a cada crise (registro prospectivo),
+    comparados com os dias comuns da mesma pessoa."""
+    cols = [f"prem_{k}" for k in db.PREMONITORIOS]
+    noites = dia[dia["preenchido_noite_em_utc"].notna()].set_index("data_referencia")
+    if noites.empty:
+        return {}
+    dias_crise = set(cri["inicio_local"].dt.normalize())
+    vesperas = [d - pd.Timedelta(days=1) for d in dias_crise]
+    vesp = noites.loc[[d for d in vesperas if d in noites.index], cols].fillna(False).astype(bool)
+    excluir = dias_crise | set(vesperas)
+    comuns = noites.loc[[d for d in noites.index if d not in excluir], cols].fillna(False).astype(bool)
+    top = vesp.mean().sort_values(ascending=False) if len(vesp) else pd.Series(dtype=float)
+    return {
+        "n_vesp": len(vesp),
+        "vesp_algum": vesp.any(axis=1).mean() if len(vesp) else None,
+        "n_comuns": len(comuns),
+        "comuns_algum": comuns.any(axis=1).mean() if len(comuns) else None,
+        "top": [(db.PREMONITORIOS[c.removeprefix("prem_")], v) for c, v in top.head(3).items() if v > 0],
+    }
+
+
+def _literatura(ids: list[str]) -> None:
+    import referencias as ref
+    F = ref.FONTES
+    st.caption("Cada paciente ao lado de dados publicados. Os métodos são diferentes (diário deste app × "
+               "estudos com outras populações), então a comparação é qualitativa: serve para ver se os "
+               "registros estão coerentes com o que se conhece, não para classificar ninguém.")
+
+    def pct(v):
+        return "—" if v is None or pd.isna(v) else f"{v:.0%}"
+
+    dados = {uid: (db.df_diario(uid), db.df_crises(uid)) for uid in ids}
+    tabela = {"Indicador": [], **{uid: [] for uid in ids}, "Literatura": [], "Fonte": []}
+
+    def linha(indicador, valores, literatura, fonte):
+        tabela["Indicador"].append(indicador)
+        for uid in ids:
+            tabela[uid].append(valores.get(uid, "—"))
+        tabela["Literatura"].append(literatura)
+        tabela["Fonte"].append(fonte)
+
+    aura_med, aura_60, n_aura = {}, {}, {}
+    seqs, prem_v, prem_c, prem_top = {}, {}, {}, {}
+    for uid, (dia, cri) in dados.items():
+        dur = cri.loc[cri["teve_aura"] == True, "aura_duracao_min"].dropna()  # noqa: E712
+        n_aura[uid] = f"{len(dur)}"
+        aura_med[uid] = _fmt(_mediana(dur.clip(upper=61)), " min") if len(dur) else "—"
+        aura_60[uid] = pct((dur > 60).mean()) if len(dur) else "—"
+        seqs[uid] = _sequencia_aura_dor(cri)
+        p = _premonitorios_vespera(dia, cri) if len(dia) else {}
+        prem_v[uid] = f"{pct(p.get('vesp_algum'))} (n={p.get('n_vesp', 0)})" if p else "—"
+        prem_c[uid] = f"{pct(p.get('comuns_algum'))} (n={p.get('n_comuns', 0)})" if p else "—"
+        prem_top[uid] = ", ".join(f"{s} {v:.0%}" for s, v in p.get("top", [])) or "—"
+
+    linha("Auras com duração registrada", n_aura, "72 pacientes, 216 auras", "Viana")
+    linha("Duração da aura (mediana)", aura_med,
+          f"{ref.VIANA_AURA_MEDIANA_MIN} min (IQR {ref.VIANA_AURA_IQR})", "Viana")
+    linha("Auras acima de 60 min", aura_60,
+          f"{ref.VIANA_SINTOMAS_ACIMA_60:.0%} dos sintomas de aura", "Viana")
+    for cat, v in ref.VIANA_SEQUENCIA.items():
+        vals = {uid: (pct((s == cat).mean()) + f" ({(s == cat).sum()}/{len(s)})" if len(s) else "—")
+                for uid, s in seqs.items()}
+        linha(f"Sequência: {cat}", vals, f"{v:.0%} das auras", "Viana")
+    linha("Crises com ≥1 sintoma premonitório na noite anterior", prem_v,
+          f"{ref.LAURELL_COM_PREMONITORIO:.0%} das pessoas relatam ter", "Laurell")
+    linha("Dias comuns com ≥1 sintoma premonitório", prem_c,
+          "sem dado comparável publicado", "—")
+    linha("Sintomas mais frequentes na véspera", prem_top,
+          f"bocejos {ref.LAURELL_BOCEJO:.0%}; humor e cansaço ~1/3 cada", "Laurell")
+
+    st.dataframe(pd.DataFrame(tabela), hide_index=True, width="stretch",
+                 height=36 * (len(tabela["Indicador"]) + 1) + 3)
+    st.caption("A linha \"dias comuns\" é essencial: se os sintomas aparecem tanto na véspera quanto em dias "
+               "comuns, eles não antecipam a crise. Com poucas crises, qualquer porcentagem ainda é instável.")
+
+    with st.container(border=True):
+        st.markdown("**Contexto (não comparável diretamente)**")
+        pv = ref.QUEIROZ_PREVALENCIA
+        st.markdown(
+            f"- Prevalência de enxaqueca no Brasil: {pv['geral']:.1%} (mulheres {pv['mulheres']:.1%}, "
+            f"homens {pv['homens']:.1%}) · [Queiroz et al., 2009]({F['queiroz']['link']})\n"
+            f"- Melhor previsão publicada com diário + wearable que encontramos: AUC {ref.STUBBERUD_AUC} "
+            f"(18 pacientes; não acertou nenhuma crise no teste) · [Stubberud et al., 2023]({F['stubberud']['link']})")
+
+    st.markdown("**Fontes**")
+    nomes = {"viana": "Viana", "laurell": "Laurell", "queiroz": "Queiroz", "stubberud": "Stubberud", "ichd3": "ICHD-3"}
+    for chave, f in F.items():
+        with st.container(border=True):
+            st.markdown(f"**{nomes[chave]}** · [{f['citacao']}]({f['link']})  \n"
+                        f"Tipo: {f['tipo']}  \nLimitação: {f['limitacao']}")
+
+
+def render_pesquisa(ids: list[str], fuso: str) -> None:
+    """Área do pesquisador: visão geral, histórico de cada paciente e comparação com a literatura."""
+    st.caption("Pacientes identificados só pelo código. Cada pessoa é analisada separadamente (N=1).")
+    hoje = pd.Timestamp(db.local_agora(fuso).date())
+    aba1, aba2, aba3 = st.tabs(["Visão geral", "Histórico por paciente", "Literatura"])
+    with aba1:
+        _visao_geral(ids, hoje)
+    with aba2:
+        if ids:
+            uid = st.selectbox("Paciente", ids, key="pesq_paciente")
+            render(uid, fuso, titulo=f"Paciente {uid}", chave=f"pesq_{uid}")
+    with aba3:
+        _literatura(ids)
 
 
 def _metricas(dia: pd.DataFrame, cri: pd.DataFrame, hoje: pd.Timestamp) -> None:
@@ -199,8 +326,8 @@ def _linha_com_crises(dia: pd.DataFrame, cri: pd.DataFrame, coluna: str, titulo:
     return alt.layer(*camadas).properties(title=titulo, height=140)
 
 
-def render(id_usuario: str, fuso: str) -> None:
-    st.subheader("Relatórios")
+def render(id_usuario: str, fuso: str, titulo: str = "Relatórios", chave: str = "") -> None:
+    st.subheader(titulo)
     st.caption("Resumo descritivo. Não indica causa nem risco de crise.")
 
     dia = db.df_diario(id_usuario)
@@ -269,7 +396,7 @@ def render(id_usuario: str, fuso: str) -> None:
     # --- exportação
     st.markdown("**Exportar dados**")
     c1, c2 = st.columns(2)
-    c1.download_button("diario.csv", dia.to_csv(index=False).encode("utf-8"), "diario.csv", "text/csv",
-                       width="stretch")
-    c2.download_button("crises.csv", cri.to_csv(index=False).encode("utf-8"), "crises.csv", "text/csv",
-                       width="stretch")
+    c1.download_button("diario.csv", dia.to_csv(index=False).encode("utf-8"), f"diario_{id_usuario}.csv",
+                       "text/csv", width="stretch", key=f"{chave}dl_diario")
+    c2.download_button("crises.csv", cri.to_csv(index=False).encode("utf-8"), f"crises_{id_usuario}.csv",
+                       "text/csv", width="stretch", key=f"{chave}dl_crises")

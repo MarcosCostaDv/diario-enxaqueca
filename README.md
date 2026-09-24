@@ -9,7 +9,8 @@ App Streamlit para coletar o diário pelo celular, só com toques. Gera relatór
 | `db.py` | Esquema e acesso ao banco (única camada que fala SQL) |
 | `app.py` | Telas: Início (aura em 1 toque + o que falta preencher), Manhã, Noite, Crise, Relatórios |
 | `.streamlit/config.toml` | Tema e menu simplificado |
-| `reports.py` | Relatórios descritivos e exportação |
+| `reports.py` | Relatórios descritivos, exportação e área do pesquisador |
+| `referencias.py` | Valores da literatura, com fonte, tipo de estudo e limitação |
 
 ## Rodar no computador
 
@@ -61,7 +62,9 @@ O SQLite local só funciona com o computador ligado e na mesma rede. Para usar n
   `teve_crise = false`; dia sem registro = faltante, nunca "sem crise". Crise esquecida pode ser
   registrada pela noite e fica com `crises.registro_retroativo = true`.
 - **Referências clínicas** nos Relatórios (ICHD-3; AASM/SRS para sono): descritivo, não diagnóstico.
-- **Tela Pesquisa:** só para contas com `pesquisador = true` em `USUARIOS`; participantes por código.
+- **Papéis:** pacientes (`id`) registram e veem só os próprios dados. O pesquisador
+  (`papel = "pesquisador"`, sem `id`) não tem diário e vê a área do pesquisador: visão geral,
+  histórico de cada paciente e comparação com a literatura (`referencias.py`, só valores conferidos na fonte).
 - **Esquema v2:** o rótulo da crise é `inicio_utc` = primeiro sintoma (`inicio_tipo` = aura ou dor),
   com `teve_aura` separado. Bancos da v1 são migrados automaticamente na primeira execução
   (registros antigos viram "começou com aura"; no SQLite a tabela antiga fica guardada como `crises_v1`).
