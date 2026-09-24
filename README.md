@@ -7,7 +7,7 @@ App Streamlit para coletar o diário pelo celular, só com toques. Gera relatór
 | Arquivo | Papel |
 | --- | --- |
 | `db.py` | Esquema e acesso ao banco (única camada que fala SQL) |
-| `app.py` | Telas: Início (aura em 1 toque + o que falta preencher), Manhã, Noite, Crise, Relatórios |
+| `app.py` | Login, papéis e menus. Paciente: Hoje · Relatórios · Sobre. Pesquisador: Visão geral · Pacientes · Literatura · Fontes |
 | `.streamlit/config.toml` | Tema e menu simplificado |
 | `reports.py` | Relatórios descritivos, exportação e área do pesquisador |
 | `referencias.py` | Valores da literatura, com fonte, tipo de estudo e limitação |

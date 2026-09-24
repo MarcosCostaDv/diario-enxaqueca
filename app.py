@@ -75,6 +75,11 @@ h3 {margin-bottom: 0 !important;}
 /* botões de início de crise em vermelho: é a ação mais urgente e não pode se confundir com as outras */
 .st-key-aura button[kind="primary"] {background:#d63a3a; border-color:#d63a3a; font-weight:700;}
 .st-key-aura button[kind="primary"]:hover {background:#b82f2f; border-color:#b82f2f;}
+/* cabeçalho: título e "Sair" lado a lado mesmo em tela estreita */
+.st-key-topo [data-testid="stHorizontalBlock"] {flex-wrap: nowrap; gap: 0.5rem;}
+.st-key-topo [data-testid="stColumn"] {min-width: 0 !important;}
+.st-key-topo [data-testid="stColumn"]:last-child {flex: 0 0 auto !important; width: auto !important;}
+.st-key-topo h3 {padding: 0; margin: 0;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -138,14 +143,47 @@ def sair() -> None:
         del st.session_state[chave]
 
 
+def topo(titulo: str, legenda: str | None = None) -> None:
+    """Cabeçalho de página: título à esquerda, "Sair" discreto à direita, na mesma linha
+    também no celular (o CSS .st-key-topo impede que as colunas empilhem)."""
+    with st.container(key="topo"):
+        c1, c2 = st.columns([5, 1], vertical_alignment="center")
+        c1.markdown(f"### {titulo}")
+        if len(contas()) > 1:
+            c2.button("Sair", on_click=sair, key=f"sair_{titulo}", type="tertiary",
+                      icon=":material/logout:")
+    if legenda:
+        st.caption(legenda)
+
+
 def area_pesquisador() -> None:
-    """Pesquisador não tem diário: só a visão dos pacientes."""
+    """Pesquisador não tem diário: menu fixo com visão geral, pacientes, literatura e fontes."""
     fuso = cfg("FUSO", db.FUSO_PADRAO)
-    c1, c2 = st.columns([4, 1], vertical_alignment="center")
-    c1.markdown("### 🔬 Área do pesquisador")
-    c2.button("Sair", on_click=sair, type="tertiary")
     pacientes = {c["id"] for c in contas().values() if c["papel"] == "paciente" and c["id"]}
-    reports.render_pesquisa(sorted(pacientes | set(db.listar_usuarios())), fuso)
+    ids = sorted(pacientes | set(db.listar_usuarios()))
+
+    def visao():
+        topo("Visão geral", "Pacientes identificados só pelo código. Cada pessoa é analisada separadamente (N=1).")
+        reports.pesquisa_visao(ids, fuso)
+
+    def paciente():
+        topo("Pacientes", "Histórico completo de um paciente por vez.")
+        reports.pesquisa_paciente(ids, fuso)
+
+    def literatura():
+        topo("Literatura", "Pacientes × dados publicados, por tema.")
+        reports.pesquisa_literatura(ids)
+
+    def fontes():
+        topo("Fontes", "Tipo de estudo e limitação de cada referência usada.")
+        reports.pesquisa_fontes()
+
+    st.navigation([
+        st.Page(visao, title="Visão geral", icon=":material/dashboard:", url_path="visao", default=True),
+        st.Page(paciente, title="Pacientes", icon=":material/person:", url_path="pacientes"),
+        st.Page(literatura, title="Literatura", icon=":material/menu_book:", url_path="literatura"),
+        st.Page(fontes, title="Fontes", icon=":material/link:", url_path="fontes"),
+    ], position="top").run()
     st.stop()
 
 
@@ -223,7 +261,7 @@ def escala(onde, rotulo: str, minimo: int, maximo: int, atual, key: str):
 
 
 def tela_inicio() -> None:
-    st.markdown(f"### 🧠 Diário · {DIAS_SEMANA[AGORA.weekday()]} {AGORA:%d/%m}")
+    topo(f"Hoje · {DIAS_SEMANA[AGORA.weekday()]} {AGORA:%d/%m}")
     primeiro_uso = db.primeiro_dia(USUARIO) is None and not db.crises_incompletas(USUARIO) \
         and db.df_crises(USUARIO).empty
 
@@ -319,12 +357,10 @@ def tela_inicio() -> None:
         st.caption("Tudo em dia por hoje.")
 
     st.divider()
-    if not primeiro_uso:
-        with st.expander("ℹ️ Sobre o projeto"):
-            st.markdown(INTRO_CURTA + "\n" + INTRO)
-    st.button("📊 Relatórios", on_click=ir, args=("relatorios",), width="stretch")
-    if len(contas()) > 1:
-        st.button("Sair", on_click=sair, type="tertiary")
+    c1, c2 = st.columns(2)
+    c1.page_link(PG_RELATORIOS, label="Meus relatórios", icon=":material/bar_chart:")
+    c2.page_link(PG_SOBRE, label="Sobre o projeto", icon=":material/info:")
+
 
 
 def tela_manha() -> None:
@@ -594,13 +630,28 @@ def tela_crise() -> None:
         concluir("Crise completa.")
 
 
-def tela_relatorios() -> None:
-    st.button("← Início", on_click=ir, args=("inicio",), type="tertiary")
+# ---------------------------------------------------------------- menu do paciente
+
+TELAS = {"inicio": tela_inicio, "manha": tela_manha, "noite": tela_noite, "crise": tela_crise}
+
+
+def pagina_hoje() -> None:
+    """Registro do dia: início com pendências e, a partir dele, os formulários."""
+    TELAS.get(st.session_state.get("tela", "inicio"), tela_inicio)()
+
+
+def pagina_relatorios() -> None:
+    topo("Meus relatórios")
     reports.render(USUARIO, FUSO)
 
 
-# ---------------------------------------------------------------- roteador
+def pagina_sobre() -> None:
+    topo("Sobre o projeto")
+    st.markdown(INTRO_CURTA)
+    st.markdown(INTRO)
 
-TELAS = {"inicio": tela_inicio, "manha": tela_manha, "noite": tela_noite,
-         "crise": tela_crise, "relatorios": tela_relatorios}
-TELAS.get(st.session_state.get("tela", "inicio"), tela_inicio)()
+
+PG_HOJE = st.Page(pagina_hoje, title="Hoje", icon=":material/today:", url_path="hoje", default=True)
+PG_RELATORIOS = st.Page(pagina_relatorios, title="Relatórios", icon=":material/bar_chart:", url_path="relatorios")
+PG_SOBRE = st.Page(pagina_sobre, title="Sobre", icon=":material/info:", url_path="sobre")
+st.navigation([PG_HOJE, PG_RELATORIOS, PG_SOBRE], position="top").run()
