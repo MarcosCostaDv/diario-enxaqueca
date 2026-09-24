@@ -318,10 +318,17 @@ def tela_manha() -> None:
     desp = escolha(s2, "Quantas vezes acordou durante a noite?", ["0", "1", "2", "3+"],
                    {0: "0", 1: "1", 2: "2", 3: "3+"}.get(atual.get("sono_despertares")), k + "desp")
     qual = escolha(s2, "Qualidade (1 péssima · 5 excelente)", [1, 2, 3, 4, 5], atual.get("sono_qualidade"), k + "qual")
+    motivos = None
+    if qual in (1, 2):
+        ja = [db.SONO_MOTIVOS[m] for m in (atual.get("sono_motivos") or "").split(",") if m in db.SONO_MOTIVOS]
+        motivos = s2.pills("O que atrapalhou o sono? (pode marcar mais de um)", list(db.SONO_MOTIVOS.values()),
+                           selection_mode="multi", default=ja, key=k + "motivos")
     sint = s2.toggle("Acordei já com algum sintoma", value=bool(atual.get("acordou_com_sintoma")), key=k + "sint")
 
     if st.button("Salvar manhã", type="primary", width="stretch"):
         faltando = [n for n, v in [("despertares", desp), ("qualidade", qual)] if v is None]
+        if qual in (1, 2) and not motivos:
+            faltando.append("o que atrapalhou o sono (ou \"não sei\")")
         if faltando:
             st.error("Falta marcar: " + ", ".join(faltando) + ".")
             return
@@ -333,6 +340,8 @@ def tela_manha() -> None:
             "sono_acordou": time_para_hhmm(acordou),
             "sono_despertares": {"0": 0, "1": 1, "2": 2, "3+": 3}[desp],
             "sono_qualidade": qual,
+            # só existe para noites ruins; noites boas ficam NULL ("não perguntado")
+            "sono_motivos": ",".join(ch for ch, r in db.SONO_MOTIVOS.items() if r in (motivos or [])) or None,
             "acordou_com_sintoma": sint,
         })
         concluir("Manhã salva.")
@@ -370,6 +379,10 @@ def tela_noite() -> None:
     if ex and ex != "nenhum":
         ex_min = escolha(s3, "Duração (min)", [15, 30, 45, 60, 90], atual.get("exercicio_min"), k + "exmin")
     pulou = s3.toggle("Pulei alguma refeição", value=bool(atual.get("pulou_refeicao")), key=k + "ref")
+    rot_tela = {f: f.replace("-", "–") + " h" for f in db.TELA_FAIXAS}
+    tela = s3.segmented_control("Tempo de tela no dia (computador, celular, TV, videogame)", db.TELA_FAIXAS,
+                                format_func=rot_tela.get, default=atual.get("tela_horas"), key=k + "tela")
+    tela_fin = escolha(s3, "Tela principalmente para", db.TELA_FINALIDADES, atual.get("tela_finalidade"), k + "telafin")
 
     s4 = secao(4, "Outras dores e remédios")
     outra = escala(s4, "Dor de cabeça que NÃO foi enxaqueca (0 = nenhuma)", 0, 10, atual.get("outra_cefaleia"), k + "outra")
@@ -384,6 +397,7 @@ def tela_noite() -> None:
     if st.button("Salvar noite", type="primary", width="stretch"):
         faltando = [n for n, v in [("previsão de crise", prev), ("estresse", estr), ("humor", humor),
                                    ("cafeína", caf), ("álcool", alc), ("exercício", ex),
+                                   ("tempo de tela", tela), ("finalidade da tela", tela_fin),
                                    ("outra dor de cabeça", outra)] if v is None]
         if ex and ex != "nenhum" and ex_min is None:
             faltando.append("duração do exercício")
@@ -400,6 +414,8 @@ def tela_noite() -> None:
             "cafeina_ultima": time_para_hhmm(caf_h),
             "alcool_doses": 3 if alc == "3+" else int(alc),
             "pulou_refeicao": pulou,
+            "tela_horas": tela,
+            "tela_finalidade": tela_fin,
             "exercicio_nivel": ex,
             "exercicio_min": ex_min if ex != "nenhum" else 0,
             "outra_cefaleia": outra,

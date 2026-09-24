@@ -54,6 +54,9 @@ O SQLite local só funciona com o computador ligado e na mesma rede. Para usar n
 
 - `retroativo` foi dividido em `retroativo_manha` e `retroativo_noite`.
 - `aura_duracao_min = 61` significa "mais de 60 min".
+- **Campos novos no diário:** `sono_motivos` (só quando a qualidade do sono é 1 ou 2; noites boas ficam
+  NULL = "não perguntado"), `tela_horas` (faixa) e `tela_finalidade`. Tabelas antigas recebem essas
+  colunas automaticamente; dias anteriores ficam NULL.
 - **Esquema v2:** o rótulo da crise é `inicio_utc` = primeiro sintoma (`inicio_tipo` = aura ou dor),
   com `teve_aura` separado. Bancos da v1 são migrados automaticamente na primeira execução
   (registros antigos viram "começou com aura"; no SQLite a tabela antiga fica guardada como `crises_v1`).

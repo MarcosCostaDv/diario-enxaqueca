@@ -52,6 +52,23 @@ PREMONITORIOS = {
     "nausea": "Náusea leve",
 }
 
+# Motivo do sono ruim (só perguntado quando a qualidade é 1 ou 2): chave -> rótulo.
+# "dor_sintoma" separa sono ruim causado pela própria crise/pródromo de causas externas.
+SONO_MOTIVOS = {
+    "dor_sintoma": "dor ou sintoma",
+    "estresse": "estresse/preocupação",
+    "telas": "telas até tarde",
+    "cafeina_alcool": "cafeína/álcool",
+    "ambiente": "barulho/ambiente",
+    "horario": "horário apertado",
+    "outra_pessoa": "outra pessoa/criança",
+    "nao_sei": "não sei",
+}
+
+# Tempo de tela no dia (faixas ordinais) e finalidade principal
+TELA_FAIXAS = ["0-2", "2-4", "4-6", "6-8", "8+"]
+TELA_FINALIDADES = ["trabalho/estudo", "lazer", "os dois"]
+
 metadata = MetaData()
 
 usuarios = Table(
@@ -76,6 +93,7 @@ diario = Table(
     Column("sono_acordou", String(5)),     # hh:mm local
     Column("sono_despertares", Integer),   # 0,1,2,3 (3 = 3+)
     Column("sono_qualidade", Integer),     # 1-5
+    Column("sono_motivos", String(200)),   # chaves de SONO_MOTIVOS separadas por vírgula; só se qualidade <= 2
     Column("acordou_com_sintoma", Boolean),
     # --- noite: o dia ---
     *[Column(f"prem_{k}", Boolean) for k in PREMONITORIOS],
@@ -91,6 +109,8 @@ diario = Table(
     Column("outra_cefaleia", Integer),      # 0-10
     Column("analgesico_sem_crise", String(100)),
     Column("dia_atipico", Text),
+    Column("tela_horas", String(5)),        # faixa: 0-2 / 2-4 / 4-6 / 6-8 / 8+
+    Column("tela_finalidade", String(20)),  # trabalho/estudo / lazer / os dois
 )
 
 crises = Table(
@@ -131,7 +151,23 @@ def engine():
         _engine = create_engine(url, pool_pre_ping=True)
         metadata.create_all(_engine)
         _migrar_v1_para_v2(_engine)
+        _adicionar_colunas_novas(_engine)
     return _engine
+
+
+def _adicionar_colunas_novas(eng) -> None:
+    """Idempotente. Acrescenta às tabelas existentes as colunas novas (opcionais) do modelo.
+    Linhas antigas ficam com NULL nesses campos: "não perguntado", diferente de "não"."""
+    from sqlalchemy import inspect, text
+    insp = inspect(eng)
+    for tabela in metadata.sorted_tables:
+        existentes = {c["name"] for c in insp.get_columns(tabela.name)}
+        faltando = [c for c in tabela.columns if c.name not in existentes and c.nullable]
+        if faltando:
+            with eng.begin() as c:
+                for col in faltando:
+                    tipo = col.type.compile(dialect=eng.dialect)
+                    c.execute(text(f"ALTER TABLE {tabela.name} ADD COLUMN {col.name} {tipo}"))
 
 
 def _migrar_v1_para_v2(eng) -> None:
