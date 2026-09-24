@@ -109,6 +109,7 @@ diario = Table(
     Column("outra_cefaleia", Integer),      # 0-10
     Column("analgesico_sem_crise", String(100)),
     Column("dia_atipico", Text),
+    Column("teve_crise", Boolean),          # resposta explícita na noite; NULL = não perguntado/faltante
     Column("tela_horas", String(5)),        # faixa: 0-2 / 2-4 / 4-6 / 6-8 / 8+
     Column("tela_finalidade", String(20)),  # trabalho/estudo / lazer / os dois
 )
@@ -123,7 +124,8 @@ crises = Table(
     # Serve para quem tem crises com e sem aura; análises depois podem estratificar por teve_aura.
     Column("inicio_utc", DateTime, nullable=False, index=True),
     Column("inicio_tipo", String(10)),                 # "aura" ou "dor" (o que veio primeiro)
-    Column("inicio_precisao", String(10)),             # exato / ±15 min / ±1 h
+    Column("inicio_precisao", String(10)),             # exato / ±15 min / ±1 h / não lembro
+    Column("registro_retroativo", Boolean),            # True = registrada depois (pela noite), não na hora
     Column("teve_aura", Boolean),                      # NULL até completar a crise
     Column("aura_inicio_utc", DateTime),               # só quando houve aura e o horário é conhecido
     Column("aura_tipo", String(100)),                  # lista separada por vírgula
@@ -296,8 +298,10 @@ def primeiro_dia(id_usuario: str) -> date | None:
 
 # ---------------------------------------------------------------- crises
 
-def registrar_crise(id_usuario: str, inicio_local: datetime, precisao: str, fuso: str, tipo: str) -> str:
-    """Registra o primeiro sintoma de uma crise. tipo = "aura" ou "dor"."""
+def registrar_crise(id_usuario: str, inicio_local: datetime, precisao: str, fuso: str, tipo: str,
+                    retroativo: bool = False) -> str:
+    """Registra o primeiro sintoma de uma crise. tipo = "aura" ou "dor".
+    retroativo=True quando a crise é registrada depois (ex.: pela pergunta da noite)."""
     assert tipo in ("aura", "dor")
     inicio = local_para_utc(inicio_local, fuso)
     id_crise = str(uuid.uuid4())
@@ -306,6 +310,7 @@ def registrar_crise(id_usuario: str, inicio_local: datetime, precisao: str, fuso
             id_crise=id_crise, id_usuario=id_usuario, fuso=fuso,
             registrado_em_utc=utc_agora(),
             inicio_utc=inicio, inicio_tipo=tipo, inicio_precisao=precisao,
+            registro_retroativo=retroativo,
             teve_aura=True if tipo == "aura" else None,          # se começou com dor, pergunta depois
             aura_inicio_utc=inicio if tipo == "aura" else None,
             dor_inicio_utc=inicio if tipo == "dor" else None,
@@ -323,6 +328,19 @@ def crise_recente(id_usuario: str, horas: int = 3) -> dict | None:
             .order_by(crises.c.inicio_utc.desc())
         ).mappings().first()
     return dict(row) if row else None
+
+
+def crises_do_dia(id_usuario: str, dia_local: date, fuso: str) -> list[dict]:
+    """Crises cujo início (hora local) cai no dia informado."""
+    ini = local_para_utc(datetime.combine(dia_local, time(0, 0)), fuso)
+    fim = local_para_utc(datetime.combine(dia_local + timedelta(days=1), time(0, 0)), fuso)
+    with engine().connect() as c:
+        rows = c.execute(
+            select(crises)
+            .where((crises.c.id_usuario == id_usuario) & (crises.c.inicio_utc >= ini) & (crises.c.inicio_utc < fim))
+            .order_by(crises.c.inicio_utc)
+        ).mappings().all()
+    return [dict(r) for r in rows]
 
 
 def crises_incompletas(id_usuario: str) -> list[dict]:

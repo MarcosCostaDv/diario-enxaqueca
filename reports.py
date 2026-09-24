@@ -105,6 +105,7 @@ def render(id_usuario: str, fuso: str) -> None:
             "Começou com": cri["inicio_tipo"],
             "Teve aura": cri["teve_aura"].map({True: "sim", False: "não"}).fillna("—"),
             "Precisão": cri["inicio_precisao"],
+            "Registro": cri["registro_retroativo"].map({True: "depois", False: "na hora"}).fillna("na hora"),
             "Duração aura (min)": cri["aura_duracao_min"].map(lambda v: ">60" if v == 61 else v),
             "Início→dor (min)": ((cri["dor_inicio_local"] - cri["inicio_local"]).dt.total_seconds() / 60).round(),
             "Dor máx": cri["dor_max"],

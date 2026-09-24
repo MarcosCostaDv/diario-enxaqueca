@@ -349,23 +349,41 @@ def tela_manha() -> None:
 
 def tela_noite() -> None:
     d = st.session_state.get("data_ref") or db.data_padrao_noite(AGORA)
-    cabecalho("🌙 Noite", f"Como foi {rotulo_dia(d)}. São 4 blocos; o 5º é opcional.")
+    cabecalho("🌙 Noite", f"Como foi {rotulo_dia(d)}. São 5 blocos; o 6º é opcional.")
     atual = db.ler_dia(USUARIO, d) or {}
     k = f"n_{d}_"
     if atual.get("preenchido_noite_em_utc"):
         st.info("Este dia já foi preenchido. Salvar de novo substitui os valores.")
 
-    s1 = secao(1, "Sintomas fora do seu normal")
+    # --- 1. Crise no dia: resposta explícita (ausência de registro não é "sem crise")
+    s0 = secao(1, "Crise")
+    do_dia = db.crises_do_dia(USUARIO, d, FUSO)
+    if do_dia:
+        s0.caption("Registrada: " + "; ".join(
+            f"começou com {c['inicio_tipo']} às {db.utc_para_local(c['inicio_utc'], c['fuso']):%H:%M}" for c in do_dia))
+    padrao_crise = "sim" if do_dia else {True: "sim", False: "não"}.get(atual.get("teve_crise"))
+    teve = s0.segmented_control(f"Teve crise {rotulo_dia(d).split(' (')[0]}?", ["não", "sim"],
+                                default=padrao_crise, key=k + "tevecrise")
+    retro_tipo = retro_hora = retro_prec = None
+    if teve == "sim" and not do_dia:
+        s0.caption("Ela não foi registrada na hora. Registre agora com o horário aproximado; "
+                   "depois complete os detalhes no Início.")
+        retro_tipo = s0.segmented_control("Começou com", ["aura", "dor"], key=k + "rtipo")
+        c1, c2 = s0.columns(2)
+        retro_hora = c1.time_input("Por volta de", time(12, 0), step=900, key=k + "rhora")
+        retro_prec = c2.segmented_control("Precisão", ["±15 min", "±1 h", "não lembro"], key=k + "rprec")
+
+    s1 = secao(2, "Sintomas fora do seu normal")
     marcados = [rot for chave, rot in db.PREMONITORIOS.items() if atual.get(f"prem_{chave}")]
     prem = s1.pills("Marque os que sentiu (ou nenhum)", list(db.PREMONITORIOS.values()),
                     selection_mode="multi", default=marcados, key=k + "prem")
 
-    s2 = secao(2, "Como você está")
+    s2 = secao(3, "Como você está")
     prev = escala(s2, "Sinto que vem uma crise (0 nada · 10 certeza)", 0, 10, atual.get("previsao_subjetiva"), k + "prev")
     estr = escala(s2, "Estresse (0 nenhum · 10 máximo)", 0, 10, atual.get("estresse"), k + "estr")
     humor = escolha(s2, "Humor (1 muito ruim · 5 muito bom)", [1, 2, 3, 4, 5], atual.get("humor"), k + "humor")
 
-    s3 = secao(3, "Hábitos do dia")
+    s3 = secao(4, "Hábitos do dia")
     caf_at = None if atual.get("cafeina_doses") is None else ("4+" if atual["cafeina_doses"] >= 4 else str(atual["cafeina_doses"]))
     caf = escolha(s3, "Cafeína (doses)", ["0", "1", "2", "3", "4+"], caf_at, k + "caf")
     caf_h = None
@@ -384,13 +402,13 @@ def tela_noite() -> None:
                                 format_func=rot_tela.get, default=atual.get("tela_horas"), key=k + "tela")
     tela_fin = escolha(s3, "Tela principalmente para", db.TELA_FINALIDADES, atual.get("tela_finalidade"), k + "telafin")
 
-    s4 = secao(4, "Outras dores e remédios")
+    s4 = secao(5, "Outras dores e remédios")
     outra = escala(s4, "Dor de cabeça que NÃO foi enxaqueca (0 = nenhuma)", 0, 10, atual.get("outra_cefaleia"), k + "outra")
     analg = s4.pills("Remédio para dor tomado sem crise (se tomou)", MEDICACOES, selection_mode="multi",
                      default=[m for m in (atual.get("analgesico_sem_crise") or "").split(",") if m in MEDICACOES],
                      key=k + "analg")
 
-    s5 = secao(5, "Observação (opcional)")
+    s5 = secao(6, "Observação (opcional)")
     atip = s5.text_input("Viagem, doença, evento marcante...", value=atual.get("dia_atipico") or "",
                          key=k + "atip", label_visibility="collapsed", placeholder="Viagem, doença, evento marcante...")
 
@@ -401,6 +419,17 @@ def tela_noite() -> None:
                                    ("outra dor de cabeça", outra)] if v is None]
         if ex and ex != "nenhum" and ex_min is None:
             faltando.append("duração do exercício")
+        if teve is None:
+            faltando.insert(0, "se teve crise")
+        elif teve == "não" and do_dia:
+            faltando.insert(0, "há crise registrada neste dia: marque \"sim\"")
+        elif teve == "sim" and not do_dia:
+            if retro_tipo is None:
+                faltando.insert(0, "como a crise começou")
+            if retro_prec is None:
+                faltando.insert(0, "precisão do horário da crise")
+            elif datetime.combine(d, retro_hora) > db.local_agora(FUSO):
+                faltando.insert(0, "horário da crise no futuro")
         if faltando:
             st.error("Falta marcar: " + ", ".join(faltando) + ".")
             return
@@ -422,7 +451,12 @@ def tela_noite() -> None:
             "analgesico_sem_crise": ",".join(analg) if analg else None,
             "dia_atipico": atip or None,
         })
+        valores["teve_crise"] = teve == "sim"
         db.salvar_parte_do_dia(USUARIO, d, valores)
+        if teve == "sim" and not do_dia:
+            db.registrar_crise(USUARIO, datetime.combine(d, retro_hora), retro_prec, FUSO, retro_tipo,
+                               retroativo=True)
+            concluir("Noite salva e crise registrada. Complete os detalhes da crise no cartão abaixo.")
         concluir("Noite salva.")
 
 
@@ -445,7 +479,10 @@ def tela_crise() -> None:
     k = f"c_{id_sel}_"
 
     s1 = secao(1, "Início")
-    prec = escolha(s1, "O horário registrado é", ["exato", "±15 min", "±1 h"], crise["inicio_precisao"], k + "prec")
+    prec = escolha(s1, "O horário registrado é", ["exato", "±15 min", "±1 h", "não lembro"],
+                   crise["inicio_precisao"], k + "prec")
+    if crise.get("registro_retroativo"):
+        s1.caption("Registrada depois, pela pergunta da noite.")
 
     # --- Aura: obrigatória se começou com aura; pergunta se começou com dor
     s2 = secao(2, "Aura")
