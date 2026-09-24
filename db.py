@@ -261,6 +261,11 @@ def garantir_usuario(id_usuario: str | None, fuso: str = FUSO_PADRAO) -> str:
     return id_usuario
 
 
+def listar_usuarios() -> list[str]:
+    with engine().connect() as c:
+        return [r[0] for r in c.execute(select(usuarios.c.id_usuario))]
+
+
 def fuso_do_usuario(id_usuario: str) -> str:
     with engine().connect() as c:
         f = c.execute(select(usuarios.c.fuso).where(usuarios.c.id_usuario == id_usuario)).scalar()

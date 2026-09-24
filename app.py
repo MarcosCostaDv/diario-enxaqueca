@@ -86,7 +86,9 @@ def contas() -> dict[str, dict]:
     (login -> {senha, id}). Sem ela, modo de um usuário só (APP_PASSWORD + USER_ID)."""
     tabela = cfg("USUARIOS")
     if tabela:
-        return {str(login).lower(): {"senha": str(v["senha"]), "id": str(v["id"])} for login, v in dict(tabela).items()}
+        return {str(login).lower(): {"senha": str(v["senha"]), "id": str(v["id"]),
+                                     "pesquisador": bool(dict(v).get("pesquisador", False))}
+                for login, v in dict(tabela).items()}
     if cfg("APP_PASSWORD"):
         return {"": {"senha": str(cfg("APP_PASSWORD")), "id": str(cfg("USER_ID", "usuario-local"))}}
     return {}
@@ -116,6 +118,7 @@ def autenticar() -> str:
         ok = hmac.compare_digest(senha, conta["senha"] if conta else "\0" * 16) and conta is not None
         if ok:
             st.session_state["id_usuario"] = conta["id"]
+            st.session_state["pesquisador"] = conta.get("pesquisador", False)
             st.rerun()
         st.error("Usuário ou senha incorretos.")
     st.stop()
@@ -297,6 +300,8 @@ def tela_inicio() -> None:
         with st.expander("ℹ️ Sobre o projeto"):
             st.markdown(INTRO_CURTA + "\n" + INTRO)
     st.button("📊 Relatórios", on_click=ir, args=("relatorios",), width="stretch")
+    if st.session_state.get("pesquisador"):
+        st.button("🔬 Pesquisa (participantes)", on_click=ir, args=("pesquisa",), width="stretch")
     if len(contas()) > 1:
         st.button("Sair", on_click=sair, type="tertiary")
 
@@ -573,8 +578,17 @@ def tela_relatorios() -> None:
     reports.render(USUARIO, FUSO)
 
 
+def tela_pesquisa() -> None:
+    st.button("← Início", on_click=ir, args=("inicio",), type="tertiary")
+    if not st.session_state.get("pesquisador"):
+        st.error("Acesso restrito ao pesquisador.")
+        return
+    ids = sorted({c["id"] for c in contas().values()} | set(db.listar_usuarios()))
+    reports.render_pesquisa(ids, FUSO)
+
+
 # ---------------------------------------------------------------- roteador
 
 TELAS = {"inicio": tela_inicio, "manha": tela_manha, "noite": tela_noite,
-         "crise": tela_crise, "relatorios": tela_relatorios}
+         "crise": tela_crise, "relatorios": tela_relatorios, "pesquisa": tela_pesquisa}
 TELAS.get(st.session_state.get("tela", "inicio"), tela_inicio)()

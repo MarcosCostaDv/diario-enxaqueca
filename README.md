@@ -60,6 +60,8 @@ O SQLite local só funciona com o computador ligado e na mesma rede. Para usar n
 - **Crise explícita:** a noite pergunta "Teve crise hoje?" (`diario.teve_crise`). Dia sem crise =
   `teve_crise = false`; dia sem registro = faltante, nunca "sem crise". Crise esquecida pode ser
   registrada pela noite e fica com `crises.registro_retroativo = true`.
+- **Referências clínicas** nos Relatórios (ICHD-3; AASM/SRS para sono): descritivo, não diagnóstico.
+- **Tela Pesquisa:** só para contas com `pesquisador = true` em `USUARIOS`; participantes por código.
 - **Esquema v2:** o rótulo da crise é `inicio_utc` = primeiro sintoma (`inicio_tipo` = aura ou dor),
   com `teve_aura` separado. Bancos da v1 são migrados automaticamente na primeira execução
   (registros antigos viram "começou com aura"; no SQLite a tabela antiga fica guardada como `crises_v1`).
