@@ -1,4 +1,4 @@
-# Diário de enxaqueca com aura (MVP N=1)
+# Diário de enxaqueca (MVP, crises com ou sem aura)
 
 App Streamlit para coletar o diário pelo celular, só com toques. Gera relatórios descritivos e exporta CSV.
 
@@ -7,16 +7,23 @@ App Streamlit para coletar o diário pelo celular, só com toques. Gera relatór
 | Arquivo | Papel |
 | --- | --- |
 | `db.py` | Esquema e acesso ao banco (única camada que fala SQL) |
-| `app.py` | Telas: Aura (1 toque), Manhã, Noite, Crise, Relatórios |
+| `app.py` | Telas: Início (aura em 1 toque + o que falta preencher), Manhã, Noite, Crise, Relatórios |
+| `.streamlit/config.toml` | Tema e menu simplificado |
 | `reports.py` | Relatórios descritivos e exportação |
 
 ## Rodar no computador
 
-```bash
-pip install -r requirements.txt
-cp .streamlit/secrets.toml.example .streamlit/secrets.toml   # edite a senha
-streamlit run app.py
+Windows (PowerShell), dentro da pasta do projeto:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+copy .streamlit\secrets.toml.example .streamlit\secrets.toml   # edite a senha
+python -m streamlit run app.py
 ```
+
+Não use `python app.py`: apps Streamlit são iniciados com `streamlit run`.
 
 Os dados ficam em `diario.db` (SQLite), na mesma pasta.
 
@@ -47,4 +54,7 @@ O SQLite local só funciona com o computador ligado e na mesma rede. Para usar n
 
 - `retroativo` foi dividido em `retroativo_manha` e `retroativo_noite`.
 - `aura_duracao_min = 61` significa "mais de 60 min".
+- **Esquema v2:** o rótulo da crise é `inicio_utc` = primeiro sintoma (`inicio_tipo` = aura ou dor),
+  com `teve_aura` separado. Bancos da v1 são migrados automaticamente na primeira execução
+  (registros antigos viram "começou com aura"; no SQLite a tabela antiga fica guardada como `crises_v1`).
 - Escalas numéricas não têm valor padrão: campo não marcado não é salvo como 0.
