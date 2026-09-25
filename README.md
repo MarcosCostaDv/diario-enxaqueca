@@ -1,16 +1,36 @@
-# Diário de enxaqueca (MVP, crises com ou sem aura)
+# Diário de Enxaqueca (MVP)
 
-App Streamlit para coletar o diário pelo celular, só com toques. Gera relatórios descritivos e exporta CSV.
+Diário digital para investigar se existem sinais mensuráveis que antecedem crises de enxaqueca, com ou sem aura. O registro é feito pelo celular, só com toques. O app gera relatórios descritivos e exporta CSV.
+
+> **Não é diagnóstico** e não substitui acompanhamento médico. É uma ferramenta de coleta de dados para investigação individual (N=1).
+
+## Estado atual
+
+| Etapa | Situação |
+| --- | --- |
+| Coleta (diário, crises, dias sem crise) | em uso |
+| Relatórios descritivos e referências clínicas | em uso |
+| Área do pesquisador (visão geral, pacientes, literatura) | em uso |
+| Integração com wearables e clima | planejada |
+| Análise estatística e modelos preditivos | só depois de haver dados suficientes |
 
 ## Estrutura
 
 | Arquivo | Papel |
 | --- | --- |
-| `db.py` | Esquema e acesso ao banco (única camada que fala SQL) |
 | `app.py` | Login, papéis e menus. Paciente: Hoje · Relatórios · Sobre. Pesquisador: Visão geral · Pacientes · Literatura · Fontes |
-| `.streamlit/config.toml` | Tema e menu simplificado |
+| `db.py` | Esquema e acesso ao banco (única camada que fala SQL); migrações automáticas |
 | `reports.py` | Relatórios descritivos, exportação e área do pesquisador |
 | `referencias.py` | Valores da literatura, com fonte, tipo de estudo e limitação |
+| `.streamlit/config.toml` | Tema e menu simplificado |
+| `.streamlit/secrets.toml.example` | Modelo de configuração (a configuração real nunca vai para o Git) |
+
+## Papéis de acesso
+
+- **Paciente:** registra o próprio diário e vê só os próprios dados.
+- **Pesquisador:** não tem diário; acompanha os participantes por códigos pseudônimos.
+
+Nome, e-mail ou qualquer dado de identificação nunca entram no banco.
 
 ## Rodar no computador
 
@@ -20,52 +40,92 @@ Windows (PowerShell), dentro da pasta do projeto:
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-copy .streamlit\secrets.toml.example .streamlit\secrets.toml   # edite a senha
+copy .streamlit\secrets.toml.example .streamlit\secrets.toml
 python -m streamlit run app.py
 ```
 
 Não use `python app.py`: apps Streamlit são iniciados com `streamlit run`.
 
-Os dados ficam em `diario.db` (SQLite), na mesma pasta.
+Sem `DATABASE_URL` configurado, os dados ficam em `diario.db` (SQLite), na mesma pasta.
 
-## Usar pelo celular (em qualquer lugar)
+> **Atenção:** se a configuração local apontar para o banco de produção, o app no seu computador grava **nos dados reais**. Para testar, use o SQLite local.
 
-O SQLite local só funciona com o computador ligado e na mesma rede. Para usar na rua:
+## Publicar (uso pelo celular)
 
-1. Crie um PostgreSQL gerenciado (Neon e Supabase têm plano gratuito) e copie a URL de conexão.
-2. Suba este código para um repositório **privado** no GitHub (o `.gitignore` já exclui banco e segredos).
-3. Publique no Streamlit Community Cloud e cole o conteúdo do `secrets.toml` em *Settings → Secrets*,
-   incluindo `DATABASE_URL`. O disco desses servidores é temporário: sem `DATABASE_URL`, os dados se perdem.
-4. Deixe o app privado nas configurações de compartilhamento, além da senha.
-5. No celular, "Adicionar à tela inicial" para abrir como um app.
+1. Crie um PostgreSQL gerenciado (Neon ou Supabase têm plano gratuito). No Neon, use a conexão **direta** (sem pooling), com o prefixo `postgresql+psycopg://`.
+2. Suba o código para um repositório **privado** no GitHub. O `.gitignore` já exclui banco, `.env`, `.venv` e configurações sensíveis.
+3. Publique no Streamlit Community Cloud e informe a configuração em **Settings → Secrets**, incluindo `DATABASE_URL`. O disco desses servidores é temporário: sem `DATABASE_URL`, os dados se perdem.
+4. Deixe o app privado em **Settings → Sharing**.
+5. No celular, use "Adicionar à tela inicial".
 
-## Decisões de armazenamento (para escalar)
+Para atualizar: `git add`, `git commit`, `git pull --rebase` e `git push`. O Streamlit Cloud reinstala e reinicia sozinho.
+
+## Modelo de dados
+
+Três tabelas, todas com o código pseudônimo do participante (`id_usuario`):
+
+| Tabela | Uma linha por | Conteúdo |
+| --- | --- | --- |
+| `usuarios` | pessoa | código pseudônimo e fuso |
+| `diario` | pessoa e dia | manhã (sono) e noite (sintomas, estado, hábitos, "teve crise hoje?") |
+| `crises` | crise | início, tipo de início, aura, dor, remédio, fim |
+
+Regras que importam para a análise:
+
+- **Rótulo da crise:** `inicio_utc` = primeiro sintoma; `inicio_tipo` = `aura` ou `dor`; `teve_aura` fica separado.
+- **Dia sem crise é explícito:** `diario.teve_crise = false`. Dia sem registro é **faltante**, nunca "sem crise".
+- **Crise esquecida** pode ser registrada pela noite e fica com `crises.registro_retroativo = true` (horário aproximado).
+- **Retroatividade:** `retroativo_manha` e `retroativo_noite` marcam registros feitos depois do dia de referência.
+- **Escalas sem valor padrão:** campo não marcado fica NULL, nunca 0.
+- **Campos condicionais:** `sono_motivos` só existe quando a qualidade do sono é 1 ou 2; noites boas ficam NULL ("não perguntado").
+- **Códigos:** `aura_duracao_min = 61` significa "mais de 60 min".
+- **Tempo:** instantes em UTC (`*_utc`) com o fuso de cada registro; a hora local é derivada na análise.
+
+Consultas de exemplo (SQL Editor do Neon):
+
+```sql
+-- crises de um participante, em hora de Brasília
+SELECT inicio_utc AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo' AS inicio_local,
+       inicio_tipo, teve_aura, dor_max
+FROM crises WHERE id_usuario = 'CODIGO_DO_PARTICIPANTE' ORDER BY inicio_utc DESC;
+
+-- adesão por participante
+SELECT id_usuario, COUNT(preenchido_manha_em_utc) AS manhas, COUNT(preenchido_noite_em_utc) AS noites
+FROM diario GROUP BY id_usuario;
+```
+
+## Privacidade e exclusão de dados
+
+Os dados são de saúde (sensíveis pela LGPD). Cada participante deve assinar um termo de consentimento antes de começar.
+
+Para excluir **todos** os dados de um participante, a pedido dele (nesta ordem):
+
+```sql
+DELETE FROM crises   WHERE id_usuario = 'CODIGO_DO_PARTICIPANTE';
+DELETE FROM diario   WHERE id_usuario = 'CODIGO_DO_PARTICIPANTE';
+DELETE FROM usuarios WHERE id_usuario = 'CODIGO_DO_PARTICIPANTE';
+```
+
+Antes de qualquer exclusão em massa, crie um backup instantâneo no Neon (**Branches → Create branch**).
+
+## Referências da área do pesquisador
+
+Só entram em `referencias.py` números conferidos no resumo do artigo original, cada um com tipo de estudo e limitação:
+ICHD-3 (2018), Viana et al. (Cephalalgia), Laurell et al. (2016), Queiroz et al. (2009) e Stubberud et al. (2023).
+A comparação é qualitativa: os estudos usam populações e métodos diferentes dos deste diário.
+
+## Decisões de arquitetura (para escalar)
 
 - **Troca de banco sem mudar código:** tudo via `DATABASE_URL` (SQLAlchemy).
-- **Multiusuário desde já:** toda tabela tem `id_usuario` (UUID pseudônimo); identidade fica fora destas tabelas.
-- **Tempo:** instantes em UTC (`*_utc`) + `fuso` por registro; hora local é derivada na análise.
+- **Multiusuário desde o início:** identidade fica fora das tabelas; só o código pseudônimo entra no banco.
 - **IDs de crise em UUID:** permitem sincronizar vários dispositivos.
 - **Camada de repositório (`db.py`):** uma futura API (FastAPI) reutiliza as mesmas funções.
-- **Pendências antes de ter outros usuários:** migrations (Alembic), autenticação real por usuário,
-  criptografia e backups, termo de consentimento (LGPD, dado sensível de saúde).
-- **Wearables:** dados de alta frequência irão para tabela própria em formato longo
-  (`id_usuario, ts_utc, fonte, metrica, valor`), não para `diario`.
+- **Migrações automáticas e idempotentes:** colunas novas são acrescentadas às tabelas existentes; o esquema v1 de crises é convertido para o v2 na primeira execução.
+- **Wearables:** dados de alta frequência irão para uma tabela própria em formato longo (`id_usuario, ts_utc, fonte, metrica, valor`), não para `diario`.
 
-## Diferenças em relação ao dicionário de dados do documento
+## Pendências antes de ampliar para mais participantes
 
-- `retroativo` foi dividido em `retroativo_manha` e `retroativo_noite`.
-- `aura_duracao_min = 61` significa "mais de 60 min".
-- **Campos novos no diário:** `sono_motivos` (só quando a qualidade do sono é 1 ou 2; noites boas ficam
-  NULL = "não perguntado"), `tela_horas` (faixa) e `tela_finalidade`. Tabelas antigas recebem essas
-  colunas automaticamente; dias anteriores ficam NULL.
-- **Crise explícita:** a noite pergunta "Teve crise hoje?" (`diario.teve_crise`). Dia sem crise =
-  `teve_crise = false`; dia sem registro = faltante, nunca "sem crise". Crise esquecida pode ser
-  registrada pela noite e fica com `crises.registro_retroativo = true`.
-- **Referências clínicas** nos Relatórios (ICHD-3; AASM/SRS para sono): descritivo, não diagnóstico.
-- **Papéis:** pacientes (`id`) registram e veem só os próprios dados. O pesquisador
-  (`papel = "pesquisador"`, sem `id`) não tem diário e vê a área do pesquisador: visão geral,
-  histórico de cada paciente e comparação com a literatura (`referencias.py`, só valores conferidos na fonte).
-- **Esquema v2:** o rótulo da crise é `inicio_utc` = primeiro sintoma (`inicio_tipo` = aura ou dor),
-  com `teve_aura` separado. Bancos da v1 são migrados automaticamente na primeira execução
-  (registros antigos viram "começou com aura"; no SQLite a tabela antiga fica guardada como `crises_v1`).
-- Escalas numéricas não têm valor padrão: campo não marcado não é salvo como 0.
+- Migrações versionadas (Alembic) no lugar das automáticas
+- Autenticação mais robusta
+- Rotina de backup e política de retenção
+- Termo de consentimento formal; Comitê de Ética em Pesquisa se houver publicação
